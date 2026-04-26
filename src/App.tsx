@@ -20,31 +20,56 @@ function App() {
   const [currentStep, setCurrentStep] = useState<number>(-1)
   const [completedSteps, setCompletedSteps] = useState<number[]>([])
   const [processing, setProcessing] = useState(false)
+  const [failedStep, setFailedStep] = useState<number | null>(null)
+  const [validationPending, setValidationPending] = useState<number | null>(null)
+  const [healingMessage, setHealingMessage] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    window.ipcRenderer.on('plan-generated', (_event, generatedPlan: Plan) => {
+    const unsubs: (() => void)[] = [];
+
+    unsubs.push(window.ipcRenderer.on('plan-generated', (generatedPlan: Plan) => {
       setPlan(generatedPlan)
       setCurrentStep(-1)
       setCompletedSteps([])
-    })
+      setFailedStep(null)
+      setValidationPending(null)
+      setHealingMessage(null)
+    }));
 
-    window.ipcRenderer.on('step-started', (_event, data: { index: number, step: Step }) => {
+    unsubs.push(window.ipcRenderer.on('step-started', (data: { index: number, step: Step }) => {
       setCurrentStep(data.index)
-    })
+      setValidationPending(null)
+    }));
+
+    unsubs.push(window.ipcRenderer.on('validation-required', (data: { index: number, step: Step }) => {
+      setCurrentStep(data.index)
+      setValidationPending(data.index)
+    }));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    window.ipcRenderer.on('step-completed', (_event, data: { index: number, result: any }) => {
+    unsubs.push(window.ipcRenderer.on('step-completed', (data: { index: number, result: any }) => {
       setCompletedSteps(prev => [...prev, data.index])
       if (plan && data.index === plan.steps.length - 1) {
         setProcessing(false)
       }
-    })
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    unsubs.push(window.ipcRenderer.on('step-failed', (data: { index: number, result: any }) => {
+      setFailedStep(data.index)
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    unsubs.push(window.ipcRenderer.on('self-healing-triggered', (data: { index: number, healingPlan: any }) => {
+      if (data.healingPlan.type === 'ask_user') {
+        setHealingMessage(data.healingPlan.message)
+      }
+      setProcessing(false)
+    }));
 
     return () => {
-      window.ipcRenderer.off('plan-generated')
-      window.ipcRenderer.off('step-started')
-      window.ipcRenderer.off('step-completed')
+      unsubs.forEach(unsub => unsub())
     }
   }, [plan])
 
@@ -62,6 +87,9 @@ function App() {
     setPlan(null)
     setCompletedSteps([])
     setCurrentStep(-1)
+    setFailedStep(null)
+    setValidationPending(null)
+    setHealingMessage(null)
 
     await window.ipcRenderer.invoke('execute-command', input)
     setInput('')
@@ -97,30 +125,65 @@ function App() {
             {plan.steps.map((step, index) => {
               const isCurrent = currentStep === index
               const isCompleted = completedSteps.includes(index)
-              const isPending = !isCurrent && !isCompleted
+              const isFailed = failedStep === index
+              const isValidationPending = validationPending === index
+              const isPending = !isCurrent && !isCompleted && !isFailed && !isValidationPending
 
               return (
-                <div key={index} className={clsx(
-                  "p-3 rounded-xl flex items-center gap-3 transition-all duration-300",
-                  isCurrent ? "bg-blue-500/10 border border-blue-500/20" : "bg-white/5 border border-white/5",
-                  isPending && "opacity-50"
-                )}>
+                <div key={index} className="flex flex-col gap-2">
                   <div className={clsx(
-                    "w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0",
-                    isCompleted ? "bg-green-500/20 text-green-400" : isCurrent ? "bg-blue-500/20 text-blue-400" : "bg-white/10 text-white/50"
+                    "p-3 rounded-xl flex items-center gap-3 transition-all duration-300",
+                    isCurrent && !isValidationPending && !isFailed ? "bg-blue-500/10 border border-blue-500/20" :
+                    isValidationPending ? "bg-orange-500/10 border border-orange-500/20" :
+                    isFailed ? "bg-red-500/10 border border-red-500/20" :
+                    "bg-white/5 border border-white/5",
+                    isPending && "opacity-50"
                   )}>
-                    {isCompleted ? <Check className="w-3 h-3" /> : isCurrent ? <Loader2 className="w-3 h-3 animate-spin" /> : index + 1}
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium">
-                      {step.action.replace('_', ' ')}
-                    </span>
-                    {(step.target || step.query) && (
-                      <span className="text-xs text-white/50">
-                        {step.target || step.query}
+                    <div className={clsx(
+                      "w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0",
+                      isCompleted ? "bg-green-500/20 text-green-400" :
+                      isValidationPending ? "bg-orange-500/20 text-orange-400" :
+                      isFailed ? "bg-red-500/20 text-red-400" :
+                      isCurrent ? "bg-blue-500/20 text-blue-400" : "bg-white/10 text-white/50"
+                    )}>
+                      {isCompleted ? <Check className="w-3 h-3" /> :
+                       isValidationPending ? "!" :
+                       isFailed ? "✗" :
+                       isCurrent ? <Loader2 className="w-3 h-3 animate-spin" /> : index + 1}
+                    </div>
+                    <div className="flex flex-col flex-1">
+                      <span className="text-sm font-medium">
+                        {step.action.replace('_', ' ')}
                       </span>
-                    )}
+                      {/* @ts-expect-error adding extra fields for demo */}
+                      {(step.target || step.query || step.path) && (
+                        <span className="text-xs text-white/50 truncate">
+                          {/* @ts-expect-error adding extra fields for demo */}
+                          {step.target || step.query || step.path}
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+                  {isValidationPending && (
+                    <div className="ml-9 p-3 bg-orange-500/10 border border-orange-500/20 rounded-lg text-sm text-orange-200">
+                      <div className="mb-2">⚠️ Sensitive action detected. Proceed?</div>
+                      <div className="flex gap-2">
+                         <button className="px-3 py-1 bg-orange-500/20 hover:bg-orange-500/40 rounded transition-colors text-xs font-medium">Confirm</button>
+                         <button className="px-3 py-1 bg-white/5 hover:bg-white/10 rounded transition-colors text-xs font-medium">Skip</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {isFailed && healingMessage && (
+                    <div className="ml-9 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-200">
+                      <div className="mb-2">🤔 {healingMessage}</div>
+                      <div className="flex gap-2">
+                         <button className="px-3 py-1 bg-red-500/20 hover:bg-red-500/40 rounded transition-colors text-xs font-medium">Yes, please</button>
+                         <button className="px-3 py-1 bg-white/5 hover:bg-white/10 rounded transition-colors text-xs font-medium">Cancel</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })}
