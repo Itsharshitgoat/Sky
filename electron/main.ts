@@ -1,12 +1,11 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import type { BrowserWindow as BrowserWindowType } from 'electron'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { IntentEngine } from './engine/IntentEngine'
 import { ExecutionEngine } from './engine/ExecutionEngine'
 import { ContextEngine } from './engine/ContextEngine'
 import { ValidationGate } from './engine/ValidationGate'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const intentEngine = new IntentEngine()
 const executionEngine = new ExecutionEngine()
 const contextEngine = new ContextEngine()
@@ -24,7 +23,7 @@ const validationGate = new ValidationGate()
 process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST || '', '../public')
 
-let win: BrowserWindow | null
+let win: BrowserWindowType | null
 
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
@@ -32,7 +31,7 @@ function createWindow() {
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.mjs'),
     },
     width: 800,
     height: 600,
